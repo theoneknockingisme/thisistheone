@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Happy Birthday Somaiya — PixiJS Scene</title>
+<style>
+  html,body{height:100%;margin:0;background:#040617;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto;}
+  #ui {position:fixed;left:12px;top:12px;z-index:50;display:flex;gap:8px}
+  .btn{background:rgba(255,255,255,0.07);color:#fff;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);cursor:pointer}
+  #hint{position:fixed;right:12px;bottom:12px;color:rgba(255,255,255,0.7);font-size:13px;z-index:50}
+</style>
+</head>
+<body>
+<div id="ui">
+  <button id="musicBtn" class="btn">Play Music</button>
+  <button id="resetBtn" class="btn">Reset</button>
+</div>
+<div id="hint">Click the falling cake to make the cat blow out the candle 🎂</div>
+
+<!-- Optional: put your ambient audio src here or leave empty -->
+<audio id="ambient" loop preload="none" src=""></audio>
+
+<!-- PixiJS + GSAP -->
+<script src="https://pixijs.download/release/pixi.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+<script>
+/* --------------------------------------------------
+   Somaiya — PixiJS Magical Birthday Scene
+   - Pixi Application with layered containers
+   - Procedural/vector art (no external images)
+   - Particle systems for petals & fireflies
+   - Interactions: cake falls, click to make cat go -> blow -> eat -> balloons
+   - Uses GSAP for smooth tweens
+   -------------------------------------------------- */
+
+const app = new PIXI.Application({
+  resizeTo: window,
+  backgroundAlpha: 0,
+  antialias: true,
+  resolution: Math.max(1, window.devicePixelRatio || 1)
+});
+document.body.appendChild(app.view);
+
+// Convenience sizes
+let W = app.renderer.width, H = app.renderer.height;
+function updateWH(){ W = app.renderer.width; H = app.renderer.height; }
+
+// Scene containers (depth order)
+const skyLayer   = new PIXI.Container(); // gradient, stars, moon
+const midLayer   = new PIXI.Container(); // mountains, tree glow
+const particleLayer = new PIXI.Container(); // petals, fireflies
+const groundLayer = new PIXI.Container(); // grass/dirt
+const actorLayer  = new PIXI.Container(); // cat, cake, balloons, UI visuals
+app.stage.addChild(skyLayer, midLayer, particleLayer, groundLayer, actorLayer);
+
+// Helpful filters
+const blurFilter = new PIXI.filters.BlurFilter(6);
+const smallBlur = new PIXI.filters.BlurFilter(2);
+
+// ---------------------- Sky (gradient, stars, moon) ----------------------
+const sky = new PIXI.Graphics();
+skyLayer.addChild(sky);
+
+const stars = [];
+function makeStar(x,y,scale=1,phase=0){
+  const g = new PIXI.Graphics();
+  g.beginFill(0xFFFFFF);
+  g.drawCircle(0,0,1.6*scale);
+  g.endFill();
+  g.x = x; g.y = y; g.alpha = 0.8;
+  g._phase = phase; g._scale = scale;
+  skyLayer.addChild(g);
+  stars.push(g);
+}
+function buildSky(){
+  sky.clear();
+  // gradient rectangle (drawn with many thin rects for smoothness)
+  const g = sky;
+  // top color to bottom color
+  const top = PIXI.utils.hex2rgb(0x021124);
+  const mid = PIXI.utils.hex2rgb(0x081433);
+  const bot = PIXI.utils.hex2rgb(0x0b1833);
+  const steps = 48;
+  for(let i=0;i<steps;i++){
+    const t = i/(steps-1);
+    const r = top[0]*(1-t)+bot[0]*t;
+    const gg = Math.round(r*255), gb = Math.round(r*255);
+    // approximate: use interpolate between top & bot
+    const ir = Math.round((top[0]*(1-t) + bot[0]*t)*255);
+    const ig = Math.round((top[1]*(1-t) + bot[1]*t)*255);
+    const ib = Math.round((top[2]*(1-t) + bot[2]*t)*255);
+    g.beginFill((ir<<16) | (ig<<8) | ib);
+    g.drawRect(0, (H/steps)*i, W, H/steps + 1);
+    g.endFill();
+  }
+  // moon
+  const moon = new PIXI.Graphics();
+  const mx = W*0.82, my = H*0.22, mr = Math.min(W,H)*0.06;
+  const moonG = new PIXI.Graphics();
+  moonG.beginFill(0xFFF2D8);
+  moonG.drawCircle(0,0,mr);
+  moonG.endFill();
+  moonG.x = mx; moonG.y = my;
+  const moonGlow = new PIXI.Graphics();
+  moonGlow.beginFill(0xFFEFD1);
+  moonGlow.drawCircle(0,0,mr*2.2);
+  moonGlow.endFill();
+  moonGlow.x = mx; moonGlow.y = my; moonGlow.alpha = 0.12;
+  moonLayer = new PIXI.Container();
+  moonLayer.addChild(moonGlow, moonG);
+  moonLayer.filters = [new PIXI.filters.BlurFilter(24)];
+  skyLayer.addChild(moonLayer);
+  // stars placement
+  // clear old stars
+  for(const s of stars) s.parent && s.parent.removeChild(s);
+  stars.length = 0;
+  const starCount = Math.round(W/6);
+  for(let i=0;i<starCount;i++){
+    const x = Math.random()*W, y = Math.random()*H*0.55;
+    makeStar(x,y, Math.random()*1.6+0.4, Math.random()*Math.PI*2);
+  }
+}
+
+// animate star twinkle
+app.ticker.add((dt)=>{
+  for(const s of stars){
+    s._phase += 0.06 * dt * (0.5 + s._scale);
+    const a = 0.5 + 0.5*Math.sin(s._phase);
+    s.alpha = 0.35 + 0.65*a * s._scale;
+    s.scale.set(1 + 0.18*Math.sin(s._phase*1.6));
+  }
+});
+
+// ---------------------- Mountains (parallax silhouettes) ----------------------
+const mountains = new PIXI.Graphics();
+midLayer.addChild(mountains);
+function drawMountains(){
+  mountains.clear();
+  const base = H*0.58;
+  function drawLayer(yOff, color, alpha){
+    mountains.beginFill(color, alpha);
+    mountains.moveTo(0,H);
+    const peaks = 10;
+    for(let i=0;i<=peaks;i++){
+      const nx = i/peaks * W;
+      const ny = base + yOff + Math.sin(i*1.6 + 0.3)*80 + (i%2?30:0);
+      mountains.lineTo(nx, ny);
+    }
+    mountains.lineTo(W,H);
+    mountains.endFill();
+  }
+  drawLayer(0, 0x0f2450, 0.12);
+  drawLayer(60, 0x18345f, 0.08);
+  drawLayer(120, 0x213d6f, 0.05);
+}
+
+// ---------------------- Glowing Cherry Tree ----------------------
+const treeContainer = new PIXI.Container();
+midLayer.addChild(treeContainer);
+
+function drawTree(){
+  treeContainer.removeChildren();
+  const trunk = new PIXI.Graphics();
+  const tx = W*0.62, ty = H*0.62;
+  trunk.beginFill(0x5a3b2a);
+  trunk.drawRoundedRect(tx-40, ty-20, 80, 160, 18);
+  trunk.endFill();
+  treeContainer.addChild(trunk);
+
+  // canopy glow
+  const canopy = new PIXI.Graphics();
+  canopy.beginFill(0xFFC0DE);
+  canopy.drawEllipse(tx, ty-140, 260, 140);
+  canopy.endFill();
+  canopy.alpha = 0.98;
+  canopy.filters = [new PIXI.filters.BlurFilter(24)];
+  treeContainer.addChild(canopy);
+}
+
+// ---------------------- Ground (grass + dirt) ----------------------
+const ground = new PIXI.Graphics();
+groundLayer.addChild(ground);
+function drawGround(){
+  ground.clear();
+  const top = H*0.78;
+  // grass band
+  const grassColor = 0x6dd974;
+  ground.beginFill(grassColor);
+  ground.drawRect(0, top-48, W, 72);
+  ground.endFill();
+  // dirt
+  ground.beginFill(0x5b3b28);
+  ground.drawRect(0, top+24, W, H - top - 24);
+  ground.endFill();
+  // blades (subtle)
+  const blade = new PIXI.Graphics();
+  blade.lineStyle(1, 0xffffff, 0.05);
+  for(let i=0;i<W;i+=12){
+    blade.moveTo(i, top+8);
+    blade.quadraticCurveTo(i+6, top - (4 + (i%28)*0.12), i+12, top+8);
+  }
+  ground.addChild(blade);
+}
+
+// ---------------------- Particle systems: petals & fireflies ----------------------
+const petalPool = [];
+const fireflyPool = [];
+const PETAL_COUNT = 80;
+const FIREFLY_COUNT = 20;
+
+function createPetalTexture(){
+  const g = new PIXI.Graphics();
+  g.beginFill(0xFFE6F0);
+  g.drawEllipse(0,0,8,4);
+  g.endFill();
+  return app.renderer.generateTexture(g);
+}
+function createFireflyTexture(){
+  const g = new PIXI.Graphics();
+  const col = 0xFFF6B2;
+  g.beginFill(col);
+  g.drawCircle(0,0,5);
+  g.endFill();
+  g.beginFill(0xFFD75A,0.6);
+  g.drawCircle(0,0,2.5);
+  g.endFill();
+  return app.renderer.generateTexture(g);
+}
+
+let petalTex = null, fireflyTex = null;
+function initParticles(){
+  petalTex = createPetalTexture();
+  fireflyTex = createFireflyTexture();
+  // petals
+  for(let i=0;i<PETAL_COUNT;i++){
+    const s = new PIXI.Sprite(petalTex);
+    resetPetal(s, true);
+    particleLayer.addChild(s);
+    petalPool.push(s);
+  }
+  // fireflies
+  for(let i=0;i<FIREFLY_COUNT;i++){
+    const f = new PIXI.Sprite(fireflyTex);
+    resetFirefly(f, true);
+    particleLayer.addChild(f);
+    fireflyPool.push(f);
+  }
+}
+function resetPetal(s, init=false){
+  s.x = W*0.62 + (Math.random()-0.5)*260;
+  s.y = H*0.62 - Math.random()*180 - (init?Math.random()*H:0);
+  s.vx = (Math.random()-0.5)*0.5;
+  s.vy = 0.4 + Math.random()*0.9;
+  s.rotation = Math.random()*Math.PI*2;
+  s.vr = (Math.random()-0.5)*0.06;
+  s.alpha = 0.95;
+  s.scale.set(0.6 + Math.random()*0.6);
+}
+function resetFirefly(f, init=false){
+  f.x = Math.random()*W*0.85 + W*0.05;
+  f.y = H*0.5 + Math.random()*H*0.4;
+  f.vx = (Math.random()-0.5)*0.4;
+  f.vy = (Math.random()-0.5)*0.2;
+  f._phase = Math.random()*Math.PI*2;
+  f.alpha = 0.9;
+  f.scale.set(0.6 + Math.random()*0.8);
+}
+
+app.ticker.add((dt)=>{
+  // petals update
+  for(const p of petalPool){
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.rotation += p.vr * dt;
+    p.alpha -= 0.0008 * dt;
+    if(p.y > H + 40 || p.alpha <= 0.05){ resetPetal(p); }
+  }
+  // fireflies update
+  for(const f of fireflyPool){
+    f.x += f.vx * dt;
+    f.y += Math.sin((f._phase += 0.02*dt))*0.8 + f.vy*dt;
+    f.alpha = 0.45 + 0.55 * (0.5 + 0.5*Math.sin(f._phase*1.8));
+    if(f.x < 0) f.x = W;
+    if(f.x > W) f.x = 0;
+  }
+});
+
+// ---------------------- Actor (cartoon cat) ----------------------
+const cat = new PIXI.Container();
+actorLayer.addChild(cat);
+cat.zIndex = 10;
+
+const CAT = {
+  width: 120, height: 140,
+  x: -200, y: 0,
+  speed: 160,
+  state: 'walkIn' // walkIn | idle | walkToCake | blow | eat
+};
+
+// components
+const catBody = new PIXI.Graphics();
+const catHead = new PIXI.Graphics();
+const catEyeL = new PIXI.Graphics();
+const catEyeR = new PIXI.Graphics();
+const catMouth = new PIXI.Graphics();
+const catPaws = new PIXI.Graphics();
+
+function buildCat(){
+  cat.removeChildren();
+  // body shadow
+  const shadow = new PIXI.Graphics();
+  shadow.beginFill(0x000000,0.06);
+  shadow.drawEllipse(0,0, CAT.width*0.5, 12);
+  shadow.endFill();
+  shadow.y = CAT.height - 22;
+  shadow.x = CAT.width/2;
+  shadow.alpha = 1;
+  cat.addChild(shadow);
+
+  // body
+  catBody.clear();
+  catBody.beginFill(0xFFDDE3);
+  catBody.drawEllipse(CAT.width/2, 80, 46, 52);
+  catBody.endFill();
+  cat.addChild(catBody);
+
+  // head
+  catHead.clear();
+  catHead.beginFill(0xFFF1F4);
+  catHead.drawEllipse(CAT.width/2, 34, 36, 34);
+  catHead.endFill();
+  cat.addChild(catHead);
+
+  // ears
+  const ear = new PIXI.Graphics();
+  ear.beginFill(0xFFF1F4);
+  ear.moveTo(44,12); ear.lineTo(52,2); ear.lineTo(60,18);
+  ear.moveTo(84,12); ear.lineTo(76,2); ear.lineTo(68,18);
+  ear.endFill();
+  cat.addChild(ear);
+
+  // eyes (line)
+  catEyeL.clear(); catEyeL.lineStyle(2, 0x6b3a3a);
+  catEyeL.moveTo(48,38); catEyeL.lineTo(56,38);
+  catEyeR.clear(); catEyeR.lineStyle(2, 0x6b3a3a);
+  catEyeR.moveTo(64,38); catEyeR.lineTo(72,38);
+  cat.addChild(catEyeL); cat.addChild(catEyeR);
+
+  // mouth
+  catMouth.clear();
+  catMouth.lineStyle(1.2, 0x6b3a3a);
+  catMouth.moveTo(58,46); catMouth.lineTo(60,50); catMouth.lineTo(62,46);
+  cat.addChild(catMouth);
+
+  // paws (rects)
+  catPaws.clear(); catPaws.beginFill(0xFFF1F4);
+  catPaws.drawRect(30,116,18,10); catPaws.drawRect(78,116,18,10);
+  catPaws.endFill();
+  cat.addChild(catPaws);
+
+  cat.x = CAT.x; cat.y = H*0.78 - CAT.height - 6;
+}
+buildCat();
+
+// simple walking bob
+let walkTimer = 0;
+
+// ---------------------- Cake (falls from sky) ----------------------
+let cake = null;
+function spawnCake(){
+  if(cake && cake.parent) cake.parent.removeChild(cake);
+  cake = new PIXI.Container();
+  cake.x = W*0.52 + (Math.random()-0.5)*40;
+  cake.y = -180;
+  // shadow
+  const shadow = new PIXI.Graphics();
+  shadow.beginFill(0x000000,0.08);
+  shadow.drawEllipse(20,90,46,8);
+  shadow.endFill();
+  cake.addChild(shadow);
+  // cake base
+  const cakeBody = new PIXI.Graphics();
+  cakeBody.beginFill(0xFFF5F7);
+  cakeBody.drawRoundedRect(-42, -20, 84, 40, 8);
+  cakeBody.endFill();
+  cake.addChild(cakeBody);
+  // frosting
+  const frosting = new PIXI.Graphics();
+  frosting.beginFill(0xFFD6EA);
+  frosting.drawRoundedRect(-42, -28, 84, 8, 6);
+  frosting.endFill();
+  cake.addChild(frosting);
+  // candle
+  const candle = new PIXI.Graphics();
+  candle.beginFill(0xFFF7C4);
+  candle.drawRect(-6, -48, 12, 24);
+  candle.endFill();
+  cake.addChild(candle);
+  // flame (graphics inside container so we can hide)
+  const flame = new PIXI.Graphics();
+  function drawFlame(){
+    flame.clear();
+    flame.beginFill(0xFFDE7D);
+    flame.drawEllipse(0, -52, 8, 6);
+    flame.endFill();
+  }
+  drawFlame();
+  cake.addChild(flame);
+  // attach flag
+  cake._flame = flame;
+  cake._candle = candle;
+  cake._eaten = false;
+  actorLayer.addChild(cake);
+
+  // drop with little bounce using gsap
+  const groundY = H*0.78 - 20;
+  gsap.to(cake, {y: groundY, duration: 1.2, ease: "bounce.out", onComplete: ()=>{/* landed */}});
+}
+spawnCake();
+
+// cake click handling
+app.view.addEventListener('pointerdown', (ev)=>{
+  const rect = app.view.getBoundingClientRect();
+  const px = (ev.clientX - rect.left);
+  const py = (ev.clientY - rect.top);
+  if(!cake) return;
+  // simple hit test on cake bounds
+  const localX = px - cake.x, localY = py - cake.y;
+  if(localX > -80 && localX < 80 && localY > -80 && localY < 80 && !cake._eaten){
+    // trigger actor to walk to cake
+    CAT.state = 'walkToCake';
+    // determine target x slightly left of cake so cat stands near it
+    const targetX = cake.x - 60;
+    gsap.to(CAT, {duration: Math.abs((targetX - cat.x))/120, onUpdate: ()=>{
+      cat.x = CAT.x = lerp(cat.x, targetX, 0.18);
+    }, onComplete: ()=>{
+      CAT.state = 'blow';
+      triggerBlow();
+    }});
+  }
+});
+
+// blow logic
+function triggerBlow(){
+  // small flame flicker then extinguish after short tween
+  if(!cake) return;
+  // animate head/eyes closed to 'blow' using eye lines scale
+  gsap.to([catEyeL.scale, catEyeR.scale], {x:0.1, y:1, duration:0.28, yoyo:true, repeat:2});
+  // breath puff
+  const puff = new PIXI.Graphics();
+  puff.beginFill(0xFFF0D6, 0.9);
+  puff.drawCircle(0,0,18);
+  puff.endFill();
+  puff.x = cat.x + CAT.width*0.6;
+  puff.y = cat.y + 52;
+  actorLayer.addChild(puff);
+  gsap.to(puff, {x: cake.x - 6, y: cake.y + 18, alpha:0, duration:1.1, onComplete: ()=>{ puff.parent && puff.parent.removeChild(puff); /* extinguish flame */ extinguishFlame(); }});
+}
+
+function extinguishFlame(){
+  if(!cake) return;
+  // hide flame with small pop
+  gsap.to(cake._flame, {alpha:0, duration:0.35});
+  gsap.to(cake._candle.scale, {y:0.6, duration:0.4});
+  // eat animation -> shrink cake then mark eaten
+  gsap.to(cake.scale, {x:0.2, y:0.2, alpha:0.0, duration:0.9, delay:0.4, onComplete: ()=>{
+    cake._eaten = true;
+    cake.parent && cake.parent.removeChild(cake);
+    cake = null;
+    showGreeting();
+    spawnBalloons();
+  }});
+}
+
+// ---------------------- Balloons & Wishes ----------------------
+const wishes = [
+  "Have a beautiful year!",
+  "You're amazing!",
+  "Smile always!",
+  "Stay blessed, Somaiya!",
+  "Shine bright!",
+  "Dream big, Somaiya!"
+];
+const balloons = [];
+
+function spawnBalloons(){
+  const count = 8 + Math.floor(Math.random()*4);
+  for(let i=0;i<count;i++){
+    const b = new PIXI.Container();
+    const x = (W*0.5) + (Math.random()-0.5)*120;
+    b.x = x; b.y = (H*0.78 - 80) + (Math.random()*40);
+    // balloon body
+    const body = new PIXI.Graphics();
+    // random pastel tint
+    const palette = [0xffc0d6, 0xffe3b3, 0xc8feff, 0xffb7c9, 0xd9b3ff];
+    const col = palette[Math.floor(Math.random()*palette.length)];
+    body.beginFill(col);
+    body.drawEllipse(0,0,18,24);
+    body.endFill();
+    body.alpha = 0.98;
+    b.addChild(body);
+    // text
+    const t = new PIXI.Text(wishes[Math.floor(Math.random()*wishes.length)], {fontFamily:'system-ui',fontSize:12,fill:'#2b0a14',align:'center',wordWrap:true,wordWrapWidth:80});
+    t.anchor.set(0.5,0.5); t.y = 8;
+    b.addChild(t);
+    // string
+    const line = new PIXI.Graphics();
+    line.lineStyle(1, 0xffffff, 0.7);
+    line.moveTo(0,22); line.lineTo(6,56);
+    b.addChild(line);
+    actorLayer.addChild(b);
+    balloons.push(b);
+
+    // animate upwards with sway
+    const dy = -(H*0.6 + Math.random()*120);
+    gsap.to(b, {y: b.y + dy, duration: 6 + Math.random()*3, ease: "power1.out", onComplete: ()=>{ b.parent && b.parent.removeChild(b); }});
+    gsap.to(b, {x: '+=30', duration: 2 + Math.random()*2, yoyo:true, repeat:5, ease:"sine.inOut"});
+  }
+}
+
+// ---------------------- Greeting text ----------------------
+const greeting = new PIXI.Text("Happy Birthday, Somaiya! 🎉", {
+  fontFamily: 'Brush Script MT, system-ui',
+  fontSize: 48,
+  fill: '#fffaf0',
+  stroke: '#ff9ecf',
+  strokeThickness: 6,
+  align: 'center',
+  dropShadow: true,
+  dropShadowColor: '#ff7fb8',
+  dropShadowAngle: Math.PI/6,
+  dropShadowBlur: 8,
+  dropShadowDistance: 6
+});
+greeting.anchor.set(0.5);
+greeting.x = W/2; greeting.y = H*0.35; greeting.alpha = 0; greeting.scale.set(0.9);
+greeting.style.fontSize = Math.min(72, Math.max(28, W*0.04));
+greeting.filters = [new PIXI.filters.BlurFilter(0.8)];
+actorLayer.addChild(greeting);
+
+function showGreeting(){
+  greeting.alpha = 0;
+  greeting.scale.set(0.8);
+  greeting.x = W/2;
+  greeting.y = H*0.32;
+  gsap.to(greeting, {alpha:1, duration:0.9, scale:1, ease:"elastic.out(1,0.6)"});
+  // pulse
+  gsap.to(greeting.scale, {x:1.04, y:1.04, duration:1.2, yoyo:true, repeat:-1, ease:"sine.inOut"});
+}
+
+// ---------------------- Helpers & Anim Loop ----------------------
+function lerp(a,b,t){return a + (b-a)*t}
+
+app.ticker.add((delta)=>{
+  // walking behavior
+  const dt = app.ticker.elapsedMS;
+  walkTimer += delta;
+  // if walking in
+  if(CAT.state === 'walkIn'){
+    if(cat.x < W*0.42){
+      cat.x += CAT.speed * dt * 0.001;
+      cat.scale.x = (Math.sin(walkTimer*0.25)*0.04)+1;
+    } else {
+      CAT.state = 'idle';
+      cat.x = W*0.42;
+    }
+  } else if(CAT.state === 'walkToCake'){
+    // handled by GSAP movement referenced earlier
+  } else if(CAT.state === 'idle'){
+    // gentle bobbing
+    cat.y = (H*0.78 - CAT.height - 6) + Math.sin(walkTimer*0.12)*3;
+  } else if(CAT.state === 'blow'){
+    // temporary closed-eye triggered in blow routine
+  }
+
+  // position cat container relative to logical CAT.x
+  // ensure cat stays at base Y relative to ground
+  cat.y = H*0.78 - CAT.height - 6 + Math.sin(walkTimer*0.12)*3;
+  // small paw bob to feel alive
+  cat.scale.y = 1 + Math.sin(walkTimer*0.2)*0.02;
+});
+
+// ---------------------- Resize handler ----------------------
+function layoutResize(){
+  updateWH();
+  buildSky();
+  drawMountains();
+  drawTree();
+  drawGround();
+  // reposition cat
+  cat.y = H*0.78 - CAT.height - 6;
+  if(cake) cake.y = Math.min(cake.y, H*0.78 - 20);
+  greeting.x = W/2;
+  greeting.y = H*0.32;
+}
+window.addEventListener('resize', layoutResize);
+
+// ---------------------- Init ----------------------
+function initAll(){
+  updateWH();
+  buildSky(); drawMountains(); drawTree(); drawGround();
+  initParticles();
+  buildCat();
+  // ensure actorLayer above others
+  app.stage.sortableChildren = true;
+  // initial cat walk in
+  cat.x = -200; CAT.x = -200;
+  CAT.state = 'walkIn';
+}
+initAll();
+
+// ---------------------- Buttons ----------------------
+const musicBtn = document.getElementById('musicBtn');
+const ambient = document.getElementById('ambient');
+musicBtn.addEventListener('click', ()=>{
+  if(!ambient.src){ alert('No ambient audio provided; edit the <audio id=\"ambient\"> src in the HTML to add a track.'); return; }
+  if(ambient.paused){ ambient.play().catch(()=>{}); musicBtn.textContent = 'Pause Music'; } else { ambient.pause(); musicBtn.textContent = 'Play Music'; }
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  // clear balloons, reset cat and cake
+  balloons.forEach(b=>b.parent && b.parent.removeChild(b));
+  balloons.length = 0;
+  // reset particle pools positions
+  for(const p of petalPool) resetPetal(p,true);
+  for(const f of fireflyPool) resetFirefly(f,true);
+  // greeting hide
+  greeting.alpha = 0;
+  // reset cat
+  cat.x = -200; CAT.x = -200; CAT.state = 'walkIn';
+  // reset cake
+  if(cake) cake.parent && cake.parent.removeChild(cake);
+  spawnCake();
+});
+
+// small helper to spawn cake again if removed
+window.spawnCake = spawnCake;
+window.spawnBalloons = spawnBalloons;
+
+</script>
+</body>
+</html>
